@@ -1,0 +1,118 @@
+---
+university: "Your University"
+degree: "Master of Science in Business Analytics"
+
+bibliography: Exam refrences/Exam refrences.bib
+csl: styles/apa.csl
+
+output:
+  pdf_document:
+    toc: false
+    toc_depth: 2
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: paged
+
+fontsize: 12pt
+linestretch: 1.5
+geometry:
+  - a4paper
+  - margin=25mm
+
+
+header-includes:
+  - \usepackage{graphicx}
+  - \usepackage{helvet}
+  - \renewcommand{\familydefault}{\sfdefault}
+
+---
+
+\begin{titlepage}
+\thispagestyle{empty}
+
+\begin{center}
+\includegraphics[height=3cm]{inn_logo.png}
+
+
+\vspace*{1.0cm}
+
+
+{\normalsize Inland School of Business and Social Sciences\par}
+
+
+
+{\bfseries\large Jørgen Anmarkrud\par}
+
+\vspace{1.5cm}
+
+{\bfseries\Large Exam Paper\par}
+
+\vspace{0.5cm}
+
+{\bfseries\fontsize{20pt}{24pt}\selectfont
+Supplier Visibility and Market Share in Healthcare Staffing\par}
+
+{\normalsize Does Google Search Ranking for Relevant Keywords Predict Municipal Market Share?\par}
+
+\vspace{2.2cm}
+
+
+{\normalsize Advanced Statistical Modelling\par}
+
+\vspace{0.8cm}
+
+{\normalsize MØLBA3007-1\par}
+
+\vfill
+
+{\bfseries 2025\par}
+\end{center}
+
+\end{titlepage}
+
+
+
+\newpage
+
+
+
+
+\renewcommand{\contentsname}{Table of Contents}
+\tableofcontents
+\newpage
+
+
+# Abstract
+
+Write your abstract here (max 1 page). Summarize research question, method, findings, and conclusion.
+
+\newpage
+
+# Acknowledgements
+
+(Optional) Add acknowledgements here.
+
+\newpage
+
+
+
+# 1. Introduction
+
+Introduce your topic, research problem, and structure of thesis.
+
+# 2. Literature Review
+
+Summarize key theories, prior research, and identify gaps.
+
+# 3. Methodology
+
+Explain data, methods, and models used (e.g., time series, regression, ML).
+
+# 4. Results
+
+Present analysis, figures, and tables.  
+You can use R code chunks:
+
+```{r pressure-plot, echo=TRUE}
+plot(pressure)
