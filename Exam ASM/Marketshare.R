@@ -2,6 +2,7 @@
 #ms_data = read.csv("C:/Users/Anmar/OneDrive/Skrivebord/Exam ASM/Marketshare_data.csv")
 #test
 Marketshare_data = read.csv("https://raw.githubusercontent.com/anmarkrud1/Exam-Advanced-statistical-modelling/refs/heads/main/Exam%20ASM/Marketshare.csv")
+inhabitant_data = read.csv("https://raw.githubusercontent.com/anmarkrud1/Exam-Advanced-statistical-modelling/refs/heads/main/Exam%20ASM/Inhabitants%20per%20municipality.csv")
 
 # Count suppliers per Year × Municipality using ONLY `marketshare`
 supplier_counts_yearly <-
