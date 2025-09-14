@@ -1,5 +1,73 @@
 #Load data
-ms_data = read.csv("C:/Users/Anmar/OneDrive/Skrivebord/Exam ASM/Marketshare_data.csv")
+#ms_data = read.csv("C:/Users/Anmar/OneDrive/Skrivebord/Exam ASM/Marketshare_data.csv")
+
+Marketshare_data = read.csv("https://raw.githubusercontent.com/anmarkrud1/Exam-Advanced-statistical-modelling/refs/heads/main/Exam%20ASM/Marketshare.csv")
+
+# Count suppliers per Year × Municipality using ONLY `marketshare`
+supplier_counts_yearly <-
+  Marketshare_data %>%
+  distinct(Year, Municipality, Name) %>%
+  count(Year, Municipality, name = "NumSuppliers")
+
+
+# Add NumSuppliers as a column to `marketshare`
+Marketshare_data <-
+  Marketshare_data %>%
+  distinct(Year, Municipality, Name, .keep_all = TRUE) %>%  # safety against duplicates
+  add_count(Year, Municipality, name = "NumSuppliers") %>%
+  arrange(Year, Municipality, desc(MarketShare))
+
+library(dplyr)
+library(tidyr)
+
+# --- 1) Choose/share column & normalize to sum=1 each muni-year ---
+ms_share <-
+  Marketshare_data %>%
+  mutate(
+    # Prefer MarketShare if present; fall back to Revenue / TotalRevenue
+    Share_raw = dplyr::coalesce(MarketShare, Revenue / TotalRevenue),
+    # If someone stored % (0–100), convert to 0–1
+    Share = ifelse(Share_raw > 1, Share_raw / 100, Share_raw)
+  ) %>%
+  select(Municipality, Year, Name, Share) %>%
+  group_by(Municipality, Year) %>%
+  mutate(Share = Share / sum(Share, na.rm = TRUE)) %>%  # ensure sums to 1
+  ungroup()
+
+# --- 2) Complete supplier universe across consecutive years (missing -> 0) ---
+ms_complete <-
+  ms_share %>%
+  complete(Municipality, Year, Name, fill = list(Share = 0)) %>%
+  group_by(Municipality, Year) %>%
+  mutate(Share = Share / sum(Share, na.rm = TRUE)) %>%  # re-normalize after completing
+  ungroup()
+
+# --- 3) TVD and Loyalty per municipality-year ---
+loyalty_df <-
+  ms_complete %>%
+  group_by(Municipality, Name) %>%
+  arrange(Year, .by_group = TRUE) %>%
+  mutate(Share_lag = dplyr::lag(Share, default = 0)) %>%
+  ungroup() %>%
+  group_by(Municipality, Year) %>%
+  summarise(
+    TVD     = 0.5 * sum(abs(Share - Share_lag), na.rm = TRUE),
+    Loyalty = (1 - TVD) * 100,                   # 0–100 scale
+    .groups = "drop"
+  ) %>%
+  arrange(Municipality, Year)
+
+# --- Optional: keep first year as NA (no previous year to compare) ---
+loyalty_df <-
+  loyalty_df %>%
+  group_by(Municipality) %>%
+  mutate(Loyalty = ifelse(Year == min(Year), NA_real_, Loyalty)) %>%
+  ungroup()
+
+# View / save
+print(head(loyalty_df, 12))
+# write.csv(loyalty_df, "loyalty_scores_by_municipality_year.csv", row.names = FALSE)
+
 
 names(ms_data) <- c(
   "OrgForm",              # Stat_helsemarked_organisasjonsform
@@ -105,6 +173,7 @@ supplier_ranking =
 # ---- Optional: view top-4 using ALL-supplier denominator ----
 marketshare_top4 =
   marketshare %>% filter(Name %in% top4_suppliers)
+
 
 
 
