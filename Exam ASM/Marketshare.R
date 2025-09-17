@@ -1,51 +1,44 @@
 #Load data
 #ms_data = read.csv("C:/Users/Anmar/OneDrive/Skrivebord/Exam ASM/Marketshare_data.csv")
-#test
+
 Marketshare_data = read.csv("https://raw.githubusercontent.com/anmarkrud1/Exam-Advanced-statistical-modelling/refs/heads/main/Exam%20ASM/Marketshare.csv")
 inhabitant_data = read.csv("https://raw.githubusercontent.com/anmarkrud1/Exam-Advanced-statistical-modelling/refs/heads/main/Exam%20ASM/Inhabitants%20per%20municipality.csv")
+# ---- Packages ----
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
 
-# Count suppliers per Year × Municipality using ONLY `marketshare`
-supplier_counts_yearly <-
-  Marketshare_data %>%
+# =========================
+# 1) Shares + Loyalty
+# =========================
+# (Keeps your NumSuppliers part in case you need it later)
+supplier_counts_yearly <- Marketshare_data %>%
   distinct(Year, Municipality, Name) %>%
   count(Year, Municipality, name = "NumSuppliers")
 
-
-# Add NumSuppliers as a column to `marketshare`
-Marketshare_data <-
-  Marketshare_data %>%
-  distinct(Year, Municipality, Name, .keep_all = TRUE) %>%  # safety against duplicates
+Marketshare_data <- Marketshare_data %>%
+  distinct(Year, Municipality, Name, .keep_all = TRUE) %>%
   add_count(Year, Municipality, name = "NumSuppliers") %>%
   arrange(Year, Municipality, desc(MarketShare))
 
-library(dplyr)
-library(tidyr)
-
-# --- 1) Choose/share column & normalize to sum=1 each muni-year ---
-ms_share <-
-  Marketshare_data %>%
+# Build shares per Municipality–Year–Supplier and complete missing suppliers as 0
+ms_complete <- Marketshare_data %>%
   mutate(
-    # Prefer MarketShare if present; fall back to Revenue / TotalRevenue
     Share_raw = dplyr::coalesce(MarketShare, Revenue / TotalRevenue),
-    # If someone stored % (0–100), convert to 0–1
-    Share = ifelse(Share_raw > 1, Share_raw / 100, Share_raw)
+    Share = ifelse(Share_raw > 1, Share_raw/100, Share_raw)
   ) %>%
   select(Municipality, Year, Name, Share) %>%
   group_by(Municipality, Year) %>%
-  mutate(Share = Share / sum(Share, na.rm = TRUE)) %>%  # ensure sums to 1
-  ungroup()
-
-# --- 2) Complete supplier universe across consecutive years (missing -> 0) ---
-ms_complete <-
-  ms_share %>%
+  mutate(Share = Share / sum(Share, na.rm = TRUE)) %>%
+  ungroup() %>%
   complete(Municipality, Year, Name, fill = list(Share = 0)) %>%
   group_by(Municipality, Year) %>%
-  mutate(Share = Share / sum(Share, na.rm = TRUE)) %>%  # re-normalize after completing
+  mutate(Share = Share / sum(Share, na.rm = TRUE)) %>%
   ungroup()
 
-# --- 3) TVD and Loyalty per municipality-year ---
-loyalty_df <-
-  ms_complete %>%
+# TVD and Loyalty per municipality-year
+loyalty_df <- ms_complete %>%
   group_by(Municipality, Name) %>%
   arrange(Year, .by_group = TRUE) %>%
   mutate(Share_lag = dplyr::lag(Share, default = 0)) %>%
@@ -53,21 +46,68 @@ loyalty_df <-
   group_by(Municipality, Year) %>%
   summarise(
     TVD     = 0.5 * sum(abs(Share - Share_lag), na.rm = TRUE),
-    Loyalty = (1 - TVD) * 100,                   # 0–100 scale
+    Loyalty = (1 - TVD) * 100,
     .groups = "drop"
   ) %>%
-  arrange(Municipality, Year)
-
-# --- Optional: keep first year as NA (no previous year to compare) ---
-loyalty_df <-
-  loyalty_df %>%
   group_by(Municipality) %>%
   mutate(Loyalty = ifelse(Year == min(Year), NA_real_, Loyalty)) %>%
   ungroup()
 
-# View / save
-print(head(loyalty_df, 12))
-# write.csv(loyalty_df, "loyalty_scores_by_municipality_year.csv", row.names = FALSE)
+# =========================
+# 2) Clean inhabitants (wide -> long -> average per muni)
+# =========================
+inhabitant_long <- inhabitant_data %>%
+  rename_with(~ sub("^X", "", .x), starts_with("X")) %>%
+  pivot_longer(
+    cols = matches("^[0-9]{4}$"),
+    names_to = "Year",
+    values_to = "Inhabitants"
+  ) %>%
+  mutate(
+    Year = as.integer(Year),
+    Inhabitants = as.numeric(gsub("[^0-9\\-\\.]", "", as.character(Inhabitants)))
+  )
+
+inhabitant_avg <- inhabitant_long %>%
+  group_by(Municipality) %>%
+  summarise(avg_inhabitants = mean(Inhabitants, na.rm = TRUE), .groups = "drop")
+
+# =========================
+# 3) Average loyalty per muni & normalize join keys
+# =========================
+avg_loyalty <- loyalty_df %>%
+  group_by(Municipality) %>%
+  summarise(avg_loyalty = mean(Loyalty, na.rm = TRUE), .groups = "drop")
+
+norm_key <- function(x){
+  x %>%
+    str_to_lower() %>%
+    str_replace_all("\\s*\\([^)]*\\)", "") %>%     # drop text in parentheses e.g. "Våler (Østfold)"
+    str_replace_all("[\\u00A0\\u2000-\\u200B\\u202F\\u205F\\u3000]", " ") %>%
+    str_replace_all("[^a-zæøå\\- ]", " ") %>%
+    str_squish()
+}
+
+avg_loyalty_key    <- avg_loyalty    %>% mutate(MuniKey = norm_key(Municipality))
+inhabitant_avg_key <- inhabitant_avg %>% mutate(MuniKey = norm_key(Municipality))
+
+# =========================
+# 4) Join, bucket into tertiles, plot
+# =========================
+plot_data <- avg_loyalty_key %>%
+  inner_join(inhabitant_avg_key %>% select(MuniKey, avg_inhabitants), by = "MuniKey") %>%
+  filter(is.finite(avg_loyalty), is.finite(avg_inhabitants)) %>%
+  mutate(size_group = factor(dplyr::ntile(avg_inhabitants, 3),
+                             levels = 1:3, labels = c("Small","Medium","Large")))
+
+ggplot(plot_data, aes(x = size_group, y = avg_loyalty)) +
+  geom_boxplot() +
+  labs(
+    x = "Municipality size (tertiles by avg inhabitants)",
+    y = "Average loyalty score",
+    title = "Average loyalty vs municipality size"
+  ) +
+  theme_minimal()
 
 
 names(ms_data) <- c(
