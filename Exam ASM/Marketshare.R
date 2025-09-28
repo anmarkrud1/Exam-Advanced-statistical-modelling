@@ -1,114 +1,132 @@
 #Load data
 #ms_data = read.csv("C:/Users/Anmar/OneDrive/Skrivebord/Exam ASM/Marketshare_data.csv")
-
-Marketshare_data = read.csv("https://raw.githubusercontent.com/anmarkrud1/Exam-Advanced-statistical-modelling/refs/heads/main/Exam%20ASM/Marketshare.csv")
-inhabitant_data = read.csv("https://raw.githubusercontent.com/anmarkrud1/Exam-Advanced-statistical-modelling/refs/heads/main/Exam%20ASM/Inhabitants%20per%20municipality.csv")
 # ---- Packages ----
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(stringr)
+library(dplyr); library(stringr); library(tidyr); library(here)
 
-# =========================
-# 1) Shares + Loyalty
-# =========================
-# (Keeps your NumSuppliers part in case you need it later)
-supplier_counts_yearly <- Marketshare_data %>%
-  distinct(Year, Municipality, Name) %>%
-  count(Year, Municipality, name = "NumSuppliers")
+# ---- Read data ----
+Marketshare_data <- read.csv(
+  "https://raw.githubusercontent.com/anmarkrud1/Exam-Advanced-statistical-modelling/refs/heads/main/Exam%20ASM/Marketshare.csv",
+  check.names = FALSE
+)
+inhabitant_data <- read.csv(
+  "https://raw.githubusercontent.com/anmarkrud1/Exam-Advanced-statistical-modelling/refs/heads/main/Exam%20ASM/Inhabitants%20per%20municipality.csv",
+  check.names = FALSE
+)
 
-Marketshare_data <- Marketshare_data %>%
-  distinct(Year, Municipality, Name, .keep_all = TRUE) %>%
-  add_count(Year, Municipality, name = "NumSuppliers") %>%
-  arrange(Year, Municipality, desc(MarketShare))
-
-# Build shares per Municipality–Year–Supplier and complete missing suppliers as 0
-ms_complete <- Marketshare_data %>%
+# ---- Harmonize marketshare keys ----
+ms <- Marketshare_data %>%
   mutate(
-    Share_raw = dplyr::coalesce(MarketShare, Revenue / TotalRevenue),
-    Share = ifelse(Share_raw > 1, Share_raw/100, Share_raw)
+    Municipality = str_trim(str_to_upper(Municipality)),
+    Year = as.integer(Year)
   ) %>%
-  select(Municipality, Year, Name, Share) %>%
-  group_by(Municipality, Year) %>%
-  mutate(Share = Share / sum(Share, na.rm = TRUE)) %>%
-  ungroup() %>%
-  complete(Municipality, Year, Name, fill = list(Share = 0)) %>%
-  group_by(Municipality, Year) %>%
-  mutate(Share = Share / sum(Share, na.rm = TRUE)) %>%
-  ungroup()
+  distinct(Year, Municipality, Name, .keep_all = TRUE)
 
-# TVD and Loyalty per municipality-year
-loyalty_df <- ms_complete %>%
-  group_by(Municipality, Name) %>%
-  arrange(Year, .by_group = TRUE) %>%
-  mutate(Share_lag = dplyr::lag(Share, default = 0)) %>%
-  ungroup() %>%
+# ==== Loyalty (TVD) per Municipality-Year ====
+# Prefer MarketShare (0..1); else Revenue/TotalRevenue; else SharePct/100
+ms_shares <- ms %>%
+  mutate(
+    Share_raw = dplyr::coalesce(
+      suppressWarnings(as.numeric(MarketShare)),
+      ifelse(is.finite(TotalRevenue) & TotalRevenue > 0, Revenue / TotalRevenue, NA_real_),
+      suppressWarnings(as.numeric(SharePct))/100
+    ),
+    Share = pmin(pmax(Share_raw, 0), 1)
+  ) %>%
+  select(Municipality, Year, Name, Share)
+
+# Align t-1 shares to year t and FULL join so we count entries/exits
+shares_tm1 <- ms_shares %>%
+  transmute(Municipality, Year = Year + 1L, Name, Share_tm1 = Share)
+
+loyalty_df <- full_join(
+  ms_shares %>% rename(Share_t = Share),
+  shares_tm1,
+  by = c("Municipality","Year","Name")
+) %>%
+  mutate(
+    Share_t   = dplyr::coalesce(Share_t, 0),
+    Share_tm1 = dplyr::coalesce(Share_tm1, 0)
+  ) %>%
   group_by(Municipality, Year) %>%
   summarise(
-    TVD     = 0.5 * sum(abs(Share - Share_lag), na.rm = TRUE),
-    Loyalty = (1 - TVD) * 100,
+    TVD     = 0.5 * sum(abs(Share_t - Share_tm1), na.rm = TRUE),
+    Loyalty = pmax(0, pmin(1, 1 - TVD)),
     .groups = "drop"
-  ) %>%
-  group_by(Municipality) %>%
-  mutate(Loyalty = ifelse(Year == min(Year), NA_real_, Loyalty)) %>%
-  ungroup()
+  )
 
-# =========================
-# 2) Clean inhabitants (wide -> long -> average per muni)
-# =========================
+# ---- Suppliers per muni-year ----
+suppliers_yearly <- ms %>%
+  group_by(Municipality, Year) %>%
+  summarise(NumSuppliers = n_distinct(Name), .groups = "drop")
+
+# ---- Revenue per muni-year ----
+revenue_yearly <- ms %>%
+  group_by(Municipality, Year) %>%
+  summarise(TotalRevenue = max(TotalRevenue, na.rm = TRUE), .groups = "drop") %>%
+  mutate(TotalRevenue = ifelse(is.finite(TotalRevenue), TotalRevenue, NA_real_))
+
+# ---- Inhabitants: wide -> long ----
 inhabitant_long <- inhabitant_data %>%
-  rename_with(~ sub("^X", "", .x), starts_with("X")) %>%
+  mutate(Municipality = str_trim(str_to_upper(Municipality))) %>%
+  rename_with(~ sub("^X", "", .x), matches("^X\\d{4}$")) %>%  # X2017 -> 2017
   pivot_longer(
-    cols = matches("^[0-9]{4}$"),
+    cols = matches("^\\d{4}$"),
     names_to = "Year",
     values_to = "Inhabitants"
   ) %>%
   mutate(
     Year = as.integer(Year),
-    Inhabitants = as.numeric(gsub("[^0-9\\-\\.]", "", as.character(Inhabitants)))
+    Inhabitants = suppressWarnings(as.integer(Inhabitants))
   )
 
-inhabitant_avg <- inhabitant_long %>%
+# ---- Complete Municipality × Year key (keeps zeros) ----
+key_all <- inhabitant_long %>% distinct(Municipality, Year)
+
+# ---- Build base and join everything ----
+ms_agg <- key_all %>%
+  left_join(suppliers_yearly, by = c("Municipality","Year")) %>%
+  left_join(revenue_yearly,  by = c("Municipality","Year")) %>%
+  left_join(inhabitant_long, by = c("Municipality","Year")) %>%
+  left_join(loyalty_df,      by = c("Municipality","Year"))
+
+# ---- Final merged_df (includes Loyalty & Loyalty_adj) ----
+merged_df <- ms_agg %>%
+  arrange(Municipality, Year) %>%
   group_by(Municipality) %>%
-  summarise(avg_inhabitants = mean(Inhabitants, na.rm = TRUE), .groups = "drop")
-
-# =========================
-# 3) Average loyalty per muni & normalize join keys
-# =========================
-avg_loyalty <- loyalty_df %>%
+  mutate(
+    NumSuppliers = dplyr::coalesce(NumSuppliers, 0L),
+    TotalRevenue = ifelse(is.finite(TotalRevenue), TotalRevenue, 0),
+    Active       = TotalRevenue > 0,
+    Active_lag   = dplyr::lag(Active),
+    Loyalty_adj  = dplyr::if_else(Active & Active_lag, Loyalty, NA_real_)
+  ) %>%
+  ungroup() %>%
   group_by(Municipality) %>%
-  summarise(avg_loyalty = mean(Loyalty, na.rm = TRUE), .groups = "drop")
+  mutate(
+    Delta_NumSuppliers = NumSuppliers - dplyr::lag(NumSuppliers)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Revenue_per_capita = ifelse(!is.na(TotalRevenue) & !is.na(Inhabitants) & Inhabitants > 0,
+                                TotalRevenue / Inhabitants, NA_real_),
+    log_NumSuppliers   = log1p(NumSuppliers)    # safe if 0
+  )
 
-norm_key <- function(x){
-  x %>%
-    str_to_lower() %>%
-    str_replace_all("\\s*\\([^)]*\\)", "") %>%     # drop text in parentheses e.g. "Våler (Østfold)"
-    str_replace_all("[\\u00A0\\u2000-\\u200B\\u202F\\u205F\\u3000]", " ") %>%
-    str_replace_all("[^a-zæøå\\- ]", " ") %>%
-    str_squish()
-}
+# ---- Minimum 2 Loyalty_adj per municipality (analysis sample) ----
+min_pairs <- 2L
+keep_munis <- merged_df %>%
+  group_by(Municipality) %>%
+  summarise(n_Ladj = sum(!is.na(Loyalty_adj)), .groups = "drop") %>%
+  filter(n_Ladj >= min_pairs) %>%
+  pull(Municipality)
 
-avg_loyalty_key    <- avg_loyalty    %>% mutate(MuniKey = norm_key(Municipality))
-inhabitant_avg_key <- inhabitant_avg %>% mutate(MuniKey = norm_key(Municipality))
+analysis_min2 <- merged_df %>%
+  filter(Municipality %in% keep_munis, !is.na(Loyalty_adj))
 
-# =========================
-# 4) Join, bucket into tertiles, plot
-# =========================
-plot_data <- avg_loyalty_key %>%
-  inner_join(inhabitant_avg_key %>% select(MuniKey, avg_inhabitants), by = "MuniKey") %>%
-  filter(is.finite(avg_loyalty), is.finite(avg_inhabitants)) %>%
-  mutate(size_group = factor(dplyr::ntile(avg_inhabitants, 3),
-                             levels = 1:3, labels = c("Small","Medium","Large")))
-
-ggplot(plot_data, aes(x = size_group, y = avg_loyalty)) +
-  geom_boxplot() +
-  labs(
-    x = "Municipality size (tertiles by avg inhabitants)",
-    y = "Average loyalty score",
-    title = "Average loyalty vs municipality size"
-  ) +
-  theme_minimal()
-
+# ---- Save ----
+dir.create(here("Exam ASM"), recursive = TRUE, showWarnings = FALSE)
+saveRDS(merged_df,    here("Exam ASM", "merged_df.rds"))
+saveRDS(analysis_min2, here("Exam ASM", "analysis_min2.rds"))
 
 names(ms_data) <- c(
   "OrgForm",              # Stat_helsemarked_organisasjonsform
