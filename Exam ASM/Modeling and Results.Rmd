@@ -1,0 +1,94 @@
+---
+title: "ASM Exam: Modeling and Results"
+author: "Jørgen Anmarkrud"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2   # shows headings down to level 2 (##)
+    toc_float: true
+    number_sections: true
+---
+
+```{r}
+analysis_min2 <- readRDS(here("Exam ASM", "analysis_min2.rds"))
+CPI_Health <- readRDS(here("Exam ASM", "CPI_Health.rds"))
+MunOperatingResults <- readRDS(here("Exam ASM", "MunOperatingResults.rds"))
+
+library(dplyr)
+library(stringr)
+
+# Normalize all municipality names to lowercase + trim whitespace
+analysis_min2 <- analysis_min2 %>%
+  rename(MunName = Municipality) %>%
+  mutate(
+    Year   = as.integer(Year),
+    MunKey = str_to_lower(str_squish(str_trim(MunName)))
+  )
+
+MunOperatingResults2 <- MunOperatingResults %>%
+  mutate(
+    Year   = as.integer(Year),
+    MunKey = str_to_lower(str_squish(str_trim(MunName)))
+  )
+
+CPI_Health2 <- CPI_Health %>%
+  mutate(
+    Year   = as.integer(Year),
+    MunKey = str_to_lower(str_squish(str_trim(MunName)))
+  )
+
+analysis_df <- analysis_min2 %>%
+  select(MunKey, MunName, Year, Loyalty_adj, log_NumSuppliers) %>%
+  left_join(
+    MunOperatingResults2 %>% select(MunKey, Year, Surplus_lag1),
+    by = c("MunKey","Year")
+  ) %>%
+  left_join(
+    CPI_Health2 %>% select(MunKey, Year, HCPI_change),
+    by = c("MunKey","Year")
+  ) %>%
+  filter(!is.na(HCPI_change)) %>%   # drop rows with missing cost change
+  arrange(MunName, Year)
+
+
+
+
+```
+
+
+```{r}
+
+library(plm)
+
+pdata <- pdata.frame(analysis_df, index = c("MunKey","Year"))
+pdim(pdata)   # tells you N (munis), T (years), and balance
+
+```
+
+```{r}
+fe <- plm(Loyalty_adj ~ log_NumSuppliers + Surplus_lag1 + HCPI_change,
+          data = pdata, model = "within")
+
+re <- plm(Loyalty_adj ~ log_NumSuppliers + Surplus_lag1 + HCPI_change,
+          data = pdata, model = "random")
+
+phtest(fe, re)
+
+```
+
+```{r}
+fe <- plm(Loyalty_adj ~ log_NumSuppliers + Surplus_lag1 + HCPI_change,
+          data = pdata, model = "within")
+summary(fe)
+
+```
+```{r}
+fe_year <- plm(Loyalty_adj ~ log_NumSuppliers + Surplus_lag1 + HCPI_change + factor(Year),
+               data = pdata, model = "within")
+summary(fe_year)
+
+```
+
+
+
